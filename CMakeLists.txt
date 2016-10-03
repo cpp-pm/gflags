@@ -1,4 +1,4 @@
-cmake_minimum_required (VERSION 2.8.4 FATAL_ERROR)
+cmake_minimum_required(VERSION 3.0)
 
 if (POLICY CMP0042)
   cmake_policy (SET CMP0042 NEW)

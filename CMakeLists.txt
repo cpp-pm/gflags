@@ -346,7 +346,7 @@ file (RELATIVE_PATH INSTALL_PREFIX_REL2CONFIG_DIR "${CMAKE_INSTALL_PREFIX}/${CON
 configure_file (cmake/config.cmake.in  "${PROJECT_BINARY_DIR}/${PACKAGE_NAME}-config-install.cmake" @ONLY)
 configure_file (cmake/version.cmake.in "${PROJECT_BINARY_DIR}/${PACKAGE_NAME}-config-version.cmake" @ONLY)
 
-install (TARGETS ${TARGETS} DESTINATION ${LIBRARY_INSTALL_DIR} EXPORT gflags-lib)
+install (TARGETS ${TARGETS} DESTINATION ${LIBRARY_INSTALL_DIR} EXPORT gflags-lib INCLUDES DESTINATION include)
 if (INSTALL_HEADERS)
   install (FILES ${PUBLIC_HDRS} DESTINATION ${INCLUDE_INSTALL_DIR}/${GFLAGS_INCLUDE_DIR})
   install (

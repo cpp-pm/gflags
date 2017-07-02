@@ -78,24 +78,25 @@ endif ()
 
 # ----------------------------------------------------------------------------
 # includes
-set (CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
-include (utils)
+include ("${CMAKE_CURRENT_SOURCE_DIR}/cmake/utils.cmake")
 
 # ----------------------------------------------------------------------------
 # package information
-set (PACKAGE_NAME      "gflags")
-set (PACKAGE_VERSION   "2.2.0")
-set (PACKAGE_STRING    "${PACKAGE_NAME} ${PACKAGE_VERSION}")
-set (PACKAGE_TARNAME   "${PACKAGE_NAME}-${PACKAGE_VERSION}")
-set (PACKAGE_BUGREPORT "https://github.com/gflags/gflags/issues")
+set (PACKAGE_NAME        "gflags")
+set (PACKAGE_VERSION     "2.2.0")
+set (PACKAGE_STRING      "${PACKAGE_NAME} ${PACKAGE_VERSION}")
+set (PACKAGE_TARNAME     "${PACKAGE_NAME}-${PACKAGE_VERSION}")
+set (PACKAGE_BUGREPORT   "https://github.com/gflags/gflags/issues")
+set (PACKAGE_DESCRIPTION "A commandline flags library that allows for distributed flags.")
+set (PACKAGE_URL         "http://gflags.github.io/gflags")
 
 project (${PACKAGE_NAME} CXX)
-if (CMAKE_VERSION VERSION_LESS 100)
+if (CMAKE_VERSION VERSION_LESS 3.4)
   # C language still needed because the following required CMake modules
   # (or their dependencies, respectively) are not correctly handling
-  # the case where only CXX is enabled.
-  # - CheckTypeSize.cmake (fixed in CMake 3.1, cf. http://www.cmake.org/Bug/view.php?id=14056)
-  # - FindThreads.cmake (--> CheckIncludeFiles.cmake <--)
+  # the case where only CXX is enabled
+  # - CheckTypeSize.cmake (fixed in CMake 3.1, cf. https://cmake.org/Bug/view.php?id=14056)
+  # - FindThreads.cmake   (fixed in CMake 3.4, cf. https://cmake.org/Bug/view.php?id=14905)
   enable_language (C)
 endif ()
 
@@ -133,6 +134,10 @@ endif ()
 # prefix for package variables in CMake configuration file
 string (TOUPPER "${PACKAGE_NAME}" PACKAGE_PREFIX)
 
+# convert file path on Windows with back slashes to path with forward slashes
+# otherwise this causes an issue with the cmake_install.cmake script
+file (TO_CMAKE_PATH "${CMAKE_INSTALL_PREFIX}" CMAKE_INSTALL_PREFIX)
+
 # ----------------------------------------------------------------------------
 # options
 
@@ -164,6 +169,8 @@ gflags_define (BOOL BUILD_TESTING              "Enable build of the unit tests a
 gflags_define (BOOL INSTALL_HEADERS            "Request installation of headers and other development files."             ON  OFF)
 gflags_define (BOOL INSTALL_SHARED_LIBS        "Request installation of shared libraries."                                ON  ON)
 gflags_define (BOOL INSTALL_STATIC_LIBS        "Request installation of static libraries."                                ON  OFF)
+gflags_define (BOOL REGISTER_BUILD_DIR         "Request entry of build directory in CMake's package registry."            OFF OFF)
+gflags_define (BOOL REGISTER_INSTALL_PREFIX    "Request entry of installed package in CMake's package registry."          ON  OFF)
 
 gflags_property (BUILD_STATIC_LIBS   ADVANCED TRUE)
 gflags_property (INSTALL_HEADERS     ADVANCED TRUE)
@@ -194,6 +201,7 @@ endif ()
 
 gflags_define (STRING INCLUDE_DIR "Name of include directory of installed header files relative to CMAKE_INSTALL_PREFIX/include/" "${PACKAGE_NAME}")
 gflags_property (INCLUDE_DIR ADVANCED TRUE)
+file (TO_CMAKE_PATH "${INCLUDE_DIR}" INCLUDE_DIR)
 if (IS_ABSOLUTE INCLUDE_DIR)
   message (FATAL_ERROR "[GFLAGS_]INCLUDE_DIR must be a path relative to CMAKE_INSTALL_PREFIX/include/")
 endif ()
@@ -361,8 +369,10 @@ if (NOT DEFINED GFLAGS_ATTRIBUTE_UNUSED)
 endif ()
 
 # whenever we build a shared library (DLL on Windows), configure the public
-# headers of the API for use of this library rather than the optionally
+# headers of the API for use of this shared library rather than the optionally
 # also build statically linked library; users can override GFLAGS_DLL_DECL
+# in particular, this done by setting the INTERFACE_COMPILE_DEFINITIONS of
+# static libraries to include an empty definition for GFLAGS_DLL_DECL
 if (NOT DEFINED GFLAGS_IS_A_DLL)
   if (BUILD_SHARED_LIBS)
     set (GFLAGS_IS_A_DLL 1)
@@ -386,10 +396,11 @@ endif ()
 # ----------------------------------------------------------------------------
 # installation directories
 if (OS_WINDOWS)
-  set (RUNTIME_INSTALL_DIR Bin)
-  set (LIBRARY_INSTALL_DIR Lib)
-  set (INCLUDE_INSTALL_DIR Include)
-  set (CONFIG_INSTALL_DIR  CMake)
+  set (RUNTIME_INSTALL_DIR "bin")
+  set (LIBRARY_INSTALL_DIR "lib")
+  set (INCLUDE_INSTALL_DIR "include")
+  set (CONFIG_INSTALL_DIR  "lib/cmake/${PACKAGE_NAME}")
+  set (PKGCONFIG_INSTALL_DIR)
 else ()
   set (RUNTIME_INSTALL_DIR bin)
   # The LIB_INSTALL_DIR and LIB_SUFFIX variables are used by the Fedora
@@ -402,6 +413,7 @@ else ()
   gflags_property (LIBRARY_INSTALL_DIR ADVANCED TRUE)
   set (INCLUDE_INSTALL_DIR include)
   set (CONFIG_INSTALL_DIR  ${LIBRARY_INSTALL_DIR}/cmake/${PACKAGE_NAME})
+  set (PKGCONFIG_INSTALL_DIR ${LIBRARY_INSTALL_DIR}/pkgconfig)
 endif ()
 
 # ----------------------------------------------------------------------------
@@ -426,39 +438,37 @@ foreach (TYPE IN ITEMS STATIC SHARED)
     # multi-threaded vs. single-threaded
     foreach (opts IN ITEMS "" _nothreads)
       if (BUILD_gflags${opts}_LIB)
-        add_library (gflags${opts}_${type} ${TYPE} ${GFLAGS_SRCS} ${PRIVATE_HDRS} ${PUBLIC_HDRS})
+        set (target_name "gflags${opts}_${type}")
+        add_library (${target_name} ${TYPE} ${GFLAGS_SRCS} ${PRIVATE_HDRS} ${PUBLIC_HDRS})
+        set_target_properties (${target_name} PROPERTIES
+          OUTPUT_NAME "gflags${opts}${type_suffix}"
+          VERSION     "${PACKAGE_VERSION}"
+          SOVERSION   "${PACKAGE_SOVERSION}"
+        )
         set (include_dirs "$<BUILD_INTERFACE:${PROJECT_BINARY_DIR}/include>")
         if (INSTALL_HEADERS)
           list (APPEND include_dirs "$<INSTALL_INTERFACE:${INCLUDE_INSTALL_DIR}>")
         endif ()
-        target_include_directories (gflags${opts}_${type}
+        target_include_directories (${target_name}
           PUBLIC  "${include_dirs}"
           PRIVATE "${PROJECT_SOURCE_DIR}/src;${PROJECT_BINARY_DIR}/include/${GFLAGS_INCLUDE_DIR}"
         )
+        target_compile_definitions (${target_name} PUBLIC GFLAGS_IS_A_DLL=${GFLAGS_IS_A_DLL})
         if (opts MATCHES "nothreads")
-          set (defines "GFLAGS_IS_A_DLL=${GFLAGS_IS_A_DLL};NO_THREADS")
-        else ()
-          set (defines "GFLAGS_IS_A_DLL=${GFLAGS_IS_A_DLL}")
-          if (CMAKE_USE_PTHREADS_INIT)
-            target_link_libraries (gflags${opts}_${type} ${CMAKE_THREAD_LIBS_INIT})
-          endif ()
+          target_compile_definitions (${target_name} PRIVATE NO_THREADS)
+        elseif (CMAKE_USE_PTHREADS_INIT)
+          target_link_libraries (${target_name} ${CMAKE_THREAD_LIBS_INIT})
         endif ()
-        set_target_properties (
-          gflags${opts}_${type} PROPERTIES COMPILE_DEFINITIONS "${defines}"
-                                           OUTPUT_NAME         "gflags${opts}${type_suffix}"
-                                           VERSION             "${PACKAGE_VERSION}"
-                                           SOVERSION           "${PACKAGE_SOVERSION}"
-        )
         if (HAVE_SHLWAPI_H)
-          target_link_libraries (gflags${opts}_${type} shlwapi.lib)
+          target_link_libraries (${target_name} shlwapi.lib)
         endif ()
-        list (APPEND TARGETS gflags${opts}_${type})
+        list (APPEND TARGETS ${target_name})
         # add convenience make target for build of both shared and static libraries
         if (NOT GFLAGS_IS_SUBPROJECT)
           if (NOT TARGET gflags${opts})
             add_custom_target (gflags${opts})
           endif ()
-          add_dependencies (gflags${opts} gflags${opts}_${type})
+          add_dependencies (gflags${opts} ${target_name})
         endif ()
       endif ()
     endforeach ()
@@ -482,6 +492,7 @@ endif ()
 
 # ----------------------------------------------------------------------------
 # installation rules
+set (EXPORT_NAME ${PACKAGE_NAME}-targets)
 file (RELATIVE_PATH INSTALL_PREFIX_REL2CONFIG_DIR "${CMAKE_INSTALL_PREFIX}/${CONFIG_INSTALL_DIR}" "${CMAKE_INSTALL_PREFIX}")
 configure_file (cmake/config.cmake.in  "${PROJECT_BINARY_DIR}/${PACKAGE_NAME}-config-install.cmake" @ONLY)
 configure_file (cmake/version.cmake.in "${PROJECT_BINARY_DIR}/${PACKAGE_NAME}-config-version.cmake" @ONLY)
@@ -489,14 +500,22 @@ configure_file (cmake/version.cmake.in "${PROJECT_BINARY_DIR}/${PACKAGE_NAME}-co
 if (BUILD_SHARED_LIBS AND INSTALL_SHARED_LIBS)
   foreach (opts IN ITEMS "" _nothreads)
     if (BUILD_gflags${opts}_LIB)
-      install (TARGETS gflags${opts}_shared DESTINATION ${LIBRARY_INSTALL_DIR} EXPORT gflags-lib)
+      install (TARGETS gflags${opts}_shared
+               EXPORT ${EXPORT_NAME}
+               RUNTIME DESTINATION ${RUNTIME_INSTALL_DIR}
+               LIBRARY DESTINATION ${LIBRARY_INSTALL_DIR}
+               ARCHIVE DESTINATION ${LIBRARY_INSTALL_DIR})
     endif ()
   endforeach ()
 endif ()
 if (BUILD_STATIC_LIBS AND INSTALL_STATIC_LIBS)
   foreach (opts IN ITEMS "" _nothreads)
     if (BUILD_gflags${opts}_LIB)
-      install (TARGETS gflags${opts}_static DESTINATION ${LIBRARY_INSTALL_DIR} EXPORT gflags-lib)
+      install (TARGETS gflags${opts}_static
+               EXPORT ${EXPORT_NAME}
+               RUNTIME DESTINATION ${RUNTIME_INSTALL_DIR}
+               LIBRARY DESTINATION ${LIBRARY_INSTALL_DIR}
+               ARCHIVE DESTINATION ${LIBRARY_INSTALL_DIR})
     endif ()
   endforeach ()
 endif ()
@@ -512,17 +531,27 @@ if (INSTALL_HEADERS)
     FILES "${PROJECT_BINARY_DIR}/${PACKAGE_NAME}-config-version.cmake"
     DESTINATION ${CONFIG_INSTALL_DIR}
   )
-  install (EXPORT gflags-lib DESTINATION ${CONFIG_INSTALL_DIR} FILE ${PACKAGE_NAME}-targets.cmake)
+  install (EXPORT ${EXPORT_NAME} DESTINATION ${CONFIG_INSTALL_DIR})
   if (UNIX)
     install (PROGRAMS src/gflags_completions.sh DESTINATION ${RUNTIME_INSTALL_DIR})
   endif ()
 endif ()
 
+if (PKGCONFIG_INSTALL_DIR)
+  configure_file ("cmake/package.pc.in" "${PROJECT_BINARY_DIR}/${PACKAGE_NAME}.pc" @ONLY)
+  install (FILES "${PROJECT_BINARY_DIR}/${PACKAGE_NAME}.pc" DESTINATION "${PKGCONFIG_INSTALL_DIR}")
+endif ()
+
 # ----------------------------------------------------------------------------
 # support direct use of build tree
 set (INSTALL_PREFIX_REL2CONFIG_DIR .)
-export (TARGETS ${TARGETS} FILE "${PROJECT_BINARY_DIR}/${PACKAGE_NAME}-targets.cmake")
-export (PACKAGE gflags)
+export (TARGETS ${TARGETS} FILE "${PROJECT_BINARY_DIR}/${EXPORT_NAME}.cmake")
+if (REGISTER_BUILD_DIR)
+  export (PACKAGE ${PACKAGE_NAME})
+endif ()
+if (REGISTER_INSTALL_PREFIX)
+  register_gflags_package(${CONFIG_INSTALL_DIR})
+endif ()
 configure_file (cmake/config.cmake.in "${PROJECT_BINARY_DIR}/${PACKAGE_NAME}-config.cmake" @ONLY)
 
 # ----------------------------------------------------------------------------
@@ -580,7 +609,7 @@ if (BUILD_PACKAGING)
   set (CPACK_PACKAGE_VERSION_MAJOR       "${PACKAGE_VERSION_MAJOR}")
   set (CPACK_PACKAGE_VERSION_MINOR       "${PACKAGE_VERSION_MINOR}")
   set (CPACK_PACKAGE_VERSION_PATCH       "${PACKAGE_VERSION_PATCH}")
-  set (CPACK_PACKAGE_DESCRIPTION_SUMMARY "A commandline flags library that allows for distributed flags.")
+  set (CPACK_PACKAGE_DESCRIPTION_SUMMARY "${PACKAGE_DESCRIPTION}")
   set (CPACK_RESOURCE_FILE_WELCOME       "${CMAKE_CURRENT_BINARY_DIR}/README.txt")
   set (CPACK_RESOURCE_FILE_LICENSE       "${CMAKE_CURRENT_LIST_DIR}/COPYING.txt")
   set (CPACK_PACKAGE_DESCRIPTION_FILE    "${CMAKE_CURRENT_BINARY_DIR}/README.txt")
@@ -592,7 +621,7 @@ if (BUILD_PACKAGING)
   # RPM package information -- used in cmake/package.cmake.in also for DEB
   set (CPACK_RPM_PACKAGE_GROUP   "Development/Libraries")
   set (CPACK_RPM_PACKAGE_LICENSE "BSD")
-  set (CPACK_RPM_PACKAGE_URL     "http://gflags.github.io/gflags")
+  set (CPACK_RPM_PACKAGE_URL     "${PACKAGE_URL}")
   set (CPACK_RPM_CHANGELOG_FILE  "${CMAKE_CURRENT_LIST_DIR}/ChangeLog.txt")
 
   if (INSTALL_HEADERS)

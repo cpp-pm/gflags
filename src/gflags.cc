@@ -88,7 +88,7 @@
 // are, similarly, mostly hooks into the functionality described above.
 
 #include "config.h"
-#include "gflags.h"
+#include "gflags/gflags.h"
 
 #include <assert.h>
 #include <ctype.h>
@@ -171,12 +171,10 @@ enum DieWhenReporting { DIE, DO_NOT_DIE };
 
 // Report Error and exit if requested.
 static void ReportError(DieWhenReporting should_die, const char* format, ...) {
-  char error_message[255];
   va_list ap;
   va_start(ap, format);
-  vsnprintf(error_message, sizeof(error_message), format, ap);
+  vfprintf(stderr, format, ap);
   va_end(ap);
-  fprintf(stderr, "%s", error_message);
   fflush(stderr);   // should be unnecessary, but cygwin's rxvt buffers stderr
   if (should_die == DIE) gflags_exitfunc(1);
 }
@@ -728,7 +726,6 @@ class FlagRegistry {
   static FlagRegistry* global_registry_;   // a singleton registry
 
   Mutex lock_;
-  static Mutex global_registry_lock_;
 
   static void InitGlobalRegistry();
 
@@ -773,7 +770,12 @@ void FlagRegistry::RegisterFlag(CommandLineFlag* flag) {
 CommandLineFlag* FlagRegistry::FindFlagLocked(const char* name) {
   FlagConstIterator i = flags_.find(name);
   if (i == flags_.end()) {
-    return NULL;
+    // If the name has dashes in it, try again after replacing with
+    // underscores.
+    if (strchr(name, '-') == NULL) return NULL;
+    string name_rep = name;
+    std::replace(name_rep.begin(), name_rep.end(), '-', '_');
+    return FindFlagLocked(name_rep.c_str());
   } else {
     return i->second;
   }
@@ -926,10 +928,10 @@ bool FlagRegistry::SetFlagLocked(CommandLineFlag* flag,
 
 // Get the singleton FlagRegistry object
 FlagRegistry* FlagRegistry::global_registry_ = NULL;
-Mutex FlagRegistry::global_registry_lock_(Mutex::LINKER_INITIALIZED);
 
 FlagRegistry* FlagRegistry::GlobalRegistry() {
-  MutexLock acquire_lock(&global_registry_lock_);
+  static Mutex lock(Mutex::LINKER_INITIALIZED);
+  MutexLock acquire_lock(&lock);
   if (!global_registry_) {
     global_registry_ = new FlagRegistry;
   }
@@ -1058,9 +1060,6 @@ static string ReadFileIntoString(const char* filename) {
 
 uint32 CommandLineFlagParser::ParseNewCommandLineFlags(int* argc, char*** argv,
                                                        bool remove_flags) {
-  const char *program_name = strrchr((*argv)[0], PATH_SEPARATOR);   // nix path
-  program_name = (program_name == NULL ? (*argv)[0] : program_name+1);
-
   int first_nonopt = *argc;        // for non-options moved to the end
 
   registry_->Lock();
